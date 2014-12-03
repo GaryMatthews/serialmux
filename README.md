@@ -1,6 +1,6 @@
 The Serial API Multiplexer (“Serial Mux”) is a program that allows multiple processes to communicate with the SmartMesh IP Manager's Serial API over a TCP connection. 
 
-See the [wiki pages](wiki/) for instructions. 
+Build instructions can be found on the [wiki pages](https://github.com/dustcloud/serialmux/wiki/). 
 
 On Linux, the Serial Mux runs as a process in the foreground. We welcome contributions for creating a Linux package or startup script. 
 
