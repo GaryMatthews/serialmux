@@ -276,7 +276,7 @@ namespace DustSerialMux {
       // start a new parser
       m_hdlc = new CHDLC(INPUT_BUFFER_LEN, this);
       // init the hello to something in the past
-      ptime lastHello = second_clock::universal_time() - seconds(PICARD_HELLO_INTERVAL);
+      ptime lastHello = second_clock::universal_time() - seconds(2*PICARD_HELLO_INTERVAL);
       try {
          while (m_isRunning) {
             ptime now = second_clock::universal_time();
