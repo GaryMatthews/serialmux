@@ -10,6 +10,12 @@
 #include "serial_mux.h"  // for resetConnection
 
 #include <boost/date_time/posix_time/posix_time.hpp>
+
+#ifndef WIN32
+#include <termios.h>
+#include <unistd.h>
+#endif
+
 using namespace boost::posix_time;
 
 using namespace boost::asio;
@@ -23,7 +29,10 @@ namespace DustSerialMux {
         m_rtsDelay(rtsDelay),
         m_hwFlowControl(hwFlowControl),
         m_readTimeout(readTimeout),
-        m_serial(io_service, port)
+        m_serial(io_service, port),
+        m_readLock(),
+        m_readSem(),
+        m_input(INPUT_BUFFER_LEN)
    {
       boost::system::error_code err;
       
@@ -49,11 +58,11 @@ namespace DustSerialMux {
 
       DCB dcb = {0};
       result = GetCommState(handle, &dcb);
-#endif
+ #endif
    }
 
    CPicardBoost_Serial::~CPicardBoost_Serial() { 
-      // TODO: cleanup
+      m_serial.cancel();
    }
 
    void CPicardBoost_Serial::sendRaw(const ByteVector& data)
@@ -109,28 +118,55 @@ namespace DustSerialMux {
 #endif
    }
 
-   // read 
-   void CPicardBoost_Serial::read(const std::string& context, int timeout)
+   void CPicardBoost_Serial::handleRead(const boost::system::error_code& result,
+                                        std::size_t bytes)
    {
-      CBoostLog::log(LOG_TRACE, "Starting read()");
+      if (result) {
+         // need to notify the semaphore - unless the async read was cancelled by the timeout
+         if (result != boost::asio::error::operation_aborted) {
+             m_readSem.notify_one();
+         }
+         return;
+      }
+      std::ostringstream msg;
+      msg << "handleRead complete: len=" << bytes;
+      CBoostLog::log(LOG_TRACE, msg.str());
+
+      if (bytes > 0) { 
+         CBoostLog::logDump("Serial Read data", ByteVector(m_input.begin(), m_input.begin() + bytes));
+      }
+
+      for (size_t i = 0; i < bytes; i++) {
+          m_hdlc->addByte(m_input[i]);
+      } // the HDLC parser calls frameComplete
+
+      m_readLen = bytes;
+      // set the read semaphore
+      m_readSem.notify_one();
+   }
+
+   void CPicardBoost_Serial::read_async(const std::string& context, int timeout)
+   {
+      CBoostLog::log(LOG_TRACE, "Starting read(), async");
       bool portClosed = false;
 
       try {
-         ByteVector input(INPUT_BUFFER_LEN);
+         m_readLen = 0;
          
-         // currently, the read timeout is set via WIN32 functions
-         // and a timeout returns len = 0
-         
-         size_t len = m_serial.read_some(boost::asio::buffer(input));
-
-         std::ostringstream prefix;
-         prefix << "Serial:Read (" << context << ")";
-         CBoostLog::logDump(prefix.str(), ByteVector(input.begin(), input.begin() + len));
-         
-         for (size_t i = 0; i < len; i++) {
-            m_hdlc->addByte(input[i]);
+         m_serial.async_read_some(boost::asio::buffer(m_input),
+                                  boost::bind(&CPicardBoost_Serial::handleRead, this,
+                                              boost::asio::placeholders::error,
+                                              boost::asio::placeholders::bytes_transferred));
+         {
+            boost::unique_lock<boost::mutex> guard(m_readLock);
+            boost::system_time const wtimeout=boost::get_system_time()+ boost::posix_time::milliseconds(timeout);
+            m_readSem.timed_wait(guard, wtimeout);
+            // the timeout should cancel the async read so we don't have multiple outstanding reads
+            m_serial.cancel();
          }
-         // the HDLC parser calls frameComplete
+         std::ostringstream msg;
+         msg << "async read() complete: len=" << m_readLen;
+         CBoostLog::log(LOG_TRACE, msg.str());
       }
       catch (const std::exception&) {
          CBoostLog::log("exception (Serial read)");
@@ -140,7 +176,13 @@ namespace DustSerialMux {
       if (portClosed) {
          // when the port is closed, we reset and hope it re-opens soon
          resetConnection();
-      }
+      }      
+   }
+
+   // read 
+   void CPicardBoost_Serial::read(const std::string& context, int timeout)
+   {
+      read_async(context, timeout);
    }   
 
    

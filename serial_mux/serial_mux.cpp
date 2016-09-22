@@ -105,6 +105,22 @@ bool muxRunning = true;
 SerialMuxOptions opts;
 
 
+// listen thread is to assure we get the protocol version from
+// hello response before async listen get started
+void listen_thread()
+{
+    uint8_t version;
+    std::ostringstream msg;
+    
+    CBoostLog::log("listen_thread: waiting for Hello Response");
+    bool picardReady = gPicardIO->waitForHello();
+    version = gPicardIO->getVersion();
+    msg << "listen_thread: got version " << std::dec << (int) version;
+    CBoostLog::log(msg.str());
+    gListener->set_protocolVersion(version);
+    gListener->asyncListen(); 
+}
+
 // main loop for Serial Mux
 void serial_mux_loop()
 {
@@ -168,30 +184,29 @@ void serial_mux_loop()
 #ifdef WIN32
       SetThreadPriority(picardThread.native_handle(), THREAD_PRIORITY_HIGHEST);
 #endif
-      // wait for Hello response from Picard
-      bool picardReady = gPicardIO->waitForHello();
 
-      if (picardReady) {
-         // start command processing thread
-         boost::thread clientThread(&CBoostClientManager::commandLoop,
-                                    gClientMgr, gPicardIO);
-         
-         // start listening
-         gListener = new CBoostClientListener(io_service, opts.listenerPort, !opts.acceptAnyhost,
-                                              *gClientMgr, opts.authToken, gPicardIO->getVersion());
-         gListener->asyncListen();
-         
-         io_service.run();
-         
-         CBoostLog::log("stopping components");
-         
-         io_service.reset();
-         
-         // close command processing thread
-         gPicardIO->registerCallback(NULL); // disable callbacks from Picard output
-         gClientMgr->stop();
-         clientThread.join();
-      }
+      // start command processing thread
+      boost::thread clientThread(&CBoostClientManager::commandLoop,
+                                 gClientMgr, gPicardIO);
+      
+      // start listening
+      gListener = new CBoostClientListener(io_service, opts.listenerPort, !opts.acceptAnyhost,
+                                           *gClientMgr, opts.authToken, 0);
+      boost::thread listenThread(listen_thread);
+  
+      boost::asio::io_service::work work(io_service);
+      
+      io_service.run();
+      
+      CBoostLog::log("stopping components");
+      
+      io_service.reset();
+      
+      // close command processing thread
+      gPicardIO->registerCallback(NULL); // disable callbacks from Picard output
+      gClientMgr->stop();
+      clientThread.join();
+      listenThread.join();
       
       // shutdown output
       gPicardIO->stop();

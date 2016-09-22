@@ -41,6 +41,8 @@ namespace DustSerialMux
 
       uint16_t getPort() const { return m_listenerPort; }
 
+      void set_protocolVersion(uint8_t version) {m_protocolVersion = version;}
+
    private:
       void handleAccept(CBoostClient::pointer new_connection,
                         const boost::system::error_code& error);

@@ -282,7 +282,11 @@ namespace DustSerialMux {
             ptime now = second_clock::universal_time();
             if (!m_connected && (now - lastHello) > seconds(PICARD_HELLO_INTERVAL)) {
                // note: send should catch exceptions
+               std::ostringstream msg;
+               msg << "sending hello? lastHello=" << lastHello << " now=" << now;
+               CBoostLog::log(LOG_TRACE, msg.str());
                sendHello(0);
+               CBoostLog::log(LOG_TRACE, "sent hello");
                lastHello = second_clock::universal_time();
             }
             // the PicardIO main loop always reads
