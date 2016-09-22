@@ -32,7 +32,7 @@ namespace DustSerialMux {
         m_serial(io_service, port),
         m_readLock(),
         m_readSem(),
-        m_input(INPUT_BUFFER_LEN)
+        m_worker_is_done(false)
    {
       boost::system::error_code err;
       
@@ -121,52 +121,58 @@ namespace DustSerialMux {
    void CPicardBoost_Serial::handleRead(const boost::system::error_code& result,
                                         std::size_t bytes)
    {
-      if (result) {
+    if (result) {
          // need to notify the semaphore - unless the async read was cancelled by the timeout
          if (result != boost::asio::error::operation_aborted) {
              m_readSem.notify_one();
          }
-         return;
-      }
-      std::ostringstream msg;
-      msg << "handleRead complete: len=" << bytes;
-      CBoostLog::log(LOG_TRACE, msg.str());
-
-      if (bytes > 0) { 
-         CBoostLog::logDump("Serial Read data", ByteVector(m_input.begin(), m_input.begin() + bytes));
-      }
-
-      for (size_t i = 0; i < bytes; i++) {
-          m_hdlc->addByte(m_input[i]);
-      } // the HDLC parser calls frameComplete
-
-      m_readLen = bytes;
-      // set the read semaphore
-      m_readSem.notify_one();
+     return;
+    }
+    CBoostLog::log(LOG_TRACE, "read complete");
+    m_readLen = bytes;
+    m_worker_is_done = true;
+    // cancel timer and set the read semaphore
+    m_readSem.notify_one();
    }
 
    void CPicardBoost_Serial::read_async(const std::string& context, int timeout)
    {
       CBoostLog::log(LOG_TRACE, "Starting read(), async");
       bool portClosed = false;
+      m_worker_is_done = false;
 
       try {
+         ByteVector input(INPUT_BUFFER_LEN);
          m_readLen = 0;
          
-         m_serial.async_read_some(boost::asio::buffer(m_input),
+         m_serial.async_read_some(boost::asio::buffer(input),
                                   boost::bind(&CPicardBoost_Serial::handleRead, this,
                                               boost::asio::placeholders::error,
                                               boost::asio::placeholders::bytes_transferred));
          {
             boost::unique_lock<boost::mutex> guard(m_readLock);
             boost::system_time const wtimeout=boost::get_system_time()+ boost::posix_time::milliseconds(timeout);
-            m_readSem.timed_wait(guard, wtimeout);
+            if (!m_worker_is_done) { 
+                m_readSem.timed_wait(guard, wtimeout);
+            }
             // the timeout should cancel the async read so we don't have multiple outstanding reads
             m_serial.cancel();
          }
          std::ostringstream msg;
          msg << "async read() complete: len=" << m_readLen;
          CBoostLog::log(LOG_TRACE, msg.str());
+         msg.str("");
+         msg.clear();
+
+        if (m_readLen > 0) {
+            msg << "Serial:Read (" << context << ")";
+            CBoostLog::logDump(msg.str(), ByteVector(input.begin(), input.begin() + m_readLen));
+        }
+         
+         for (size_t i = 0; i < m_readLen; i++) {
+            m_hdlc->addByte(input[i]);
+         }
+         // the HDLC parser calls frameComplete
       }
       catch (const std::exception&) {
          CBoostLog::log("exception (Serial read)");
