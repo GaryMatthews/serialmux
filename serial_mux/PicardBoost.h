@@ -50,7 +50,7 @@ namespace DustSerialMux {
       boost::asio::serial_port m_serial;
       boost::mutex m_readLock;
       boost::condition_variable m_readSem;
-      bool m_worker_is_done;
+      bool m_readComplete;
    };
 
    class CPicardBoost_UDP : public CBasePicardIO {

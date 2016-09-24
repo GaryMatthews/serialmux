@@ -32,7 +32,7 @@ namespace DustSerialMux {
         m_serial(io_service, port),
         m_readLock(),
         m_readSem(),
-        m_worker_is_done(false)
+        m_readComplete(false)
    {
       boost::system::error_code err;
       
@@ -121,6 +121,8 @@ namespace DustSerialMux {
    void CPicardBoost_Serial::handleRead(const boost::system::error_code& result,
                                         std::size_t bytes)
    {
+    boost::unique_lock<boost::mutex> guard(m_readLock);
+    m_readComplete = true;
     if (result) {
          // need to notify the semaphore - unless the async read was cancelled by the timeout
          if (result != boost::asio::error::operation_aborted) {
@@ -130,7 +132,6 @@ namespace DustSerialMux {
     }
     CBoostLog::log(LOG_TRACE, "read complete");
     m_readLen = bytes;
-    m_worker_is_done = true;
     // cancel timer and set the read semaphore
     m_readSem.notify_one();
    }
@@ -139,7 +140,7 @@ namespace DustSerialMux {
    {
       CBoostLog::log(LOG_TRACE, "Starting read(), async");
       bool portClosed = false;
-      m_worker_is_done = false;
+      m_readComplete = false;
 
       try {
          ByteVector input(INPUT_BUFFER_LEN);
@@ -151,12 +152,12 @@ namespace DustSerialMux {
                                               boost::asio::placeholders::bytes_transferred));
          {
             boost::unique_lock<boost::mutex> guard(m_readLock);
-            boost::system_time const wtimeout=boost::get_system_time()+ boost::posix_time::milliseconds(timeout);
-            if (!m_worker_is_done) { 
+            if (!m_readComplete) { 
+                boost::system_time const wtimeout=boost::get_system_time()+ boost::posix_time::milliseconds(timeout);
                 m_readSem.timed_wait(guard, wtimeout);
+                // the timeout should cancel the async read so we don't have multiple outstanding reads
+                m_serial.cancel();
             }
-            // the timeout should cancel the async read so we don't have multiple outstanding reads
-            m_serial.cancel();
          }
          std::ostringstream msg;
          msg << "async read() complete: len=" << m_readLen;
